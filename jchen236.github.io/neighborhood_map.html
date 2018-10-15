@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+
+<style>
+  path {
+    stroke: #fff;
+    stroke-width: .5;
+    stroke-dasharray: 1;
+  }
+
+  body {
+    font-family: "Proxima Nova", "Montserrat", sans-serif;
+  }
+
+  .axis text {
+    font: 10px sans-serif;
+  }
+
+  .axis line,
+  .axis path {
+    fill: none;
+    stroke: #000;
+    shape-rendering: crispEdges;
+  }
+
+  path {
+    stroke: #fff;
+    stroke-width: .5;
+    stroke-dasharray: 1;
+    fill: #afafaf;
+  }
+
+  #neighborhoodPopover {
+    position: absolute;
+    text-align: center;
+    padding: 2px;
+    font: 12px sans-serif;
+    background: #fff;
+    border: 0px;
+    border-radius: 8px;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  #title {
+    font: 30px sans-serif;
+    position: absolute;
+    margin-top: -600px;
+    margin-left: 840px;
+  }
+
+  #toggleContainer {
+    position: absolute;
+    margin-left: 900px;
+    margin-top: -400px;
+  }
+
+  /* The switch - the box around the slider */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+  }
+
+  /* Hide default HTML checkbox */
+  .switch input {
+    display: none;
+  }
+
+  /* The slider */
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    -webkit-transition: .4s;
+    transition: .4s;
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    -webkit-transition: .4s;
+    transition: .4s;
+  }
+
+  input:checked+.slider {
+    background-color: #900;
+  }
+
+  input:focus+.slider {
+    box-shadow: 0 0 1px #900;
+  }
+
+  input:checked+.slider:before {
+    -webkit-transform: translateX(26px);
+    -ms-transform: translateX(26px);
+    transform: translateX(26px);
+  }
+
+  /* Rounded sliders */
+  .slider.round {
+    border-radius: 34px;
+  }
+
+  .slider.round:before {
+    border-radius: 50%;
+  }
+</style>
+
+<body>
+  <div id="bar"></div>
+  <div id='title'> New York Sales Data From 2016-2017</div>
+  <div id='neighborhoodPopover'> </div>
+  <div id="toggleContainer">
+    <table>
+      <tr>
+        <td><label class="switch">
+            <input id="ratio_toggle" type="checkbox">
+            <div class="slider round"></div>
+          </label></td>
+        <td>Median Sale Price per Square Foot</td>
+      </tr>
+      <tr>
+        <td><label class="switch">
+            <input id="density_toggle" type="checkbox">
+            <div class="slider round"></div>
+          </label></td>
+        <td>Property Density (Sales per Square Mile)</td>
+      </tr>
+      <tr>
+        <td><label class="switch">
+            <input id="age_toggle" type="checkbox">
+            <div class="slider round"></div>
+          </label></td>
+        <td>Median Property Age</td>
+      </tr>
+    </table>
+  </div>
+
+  <script src="https://d3js.org/d3.v4.min.js"></script>
+  <script src="https://d3js.org/topojson.v1.min.js"></script>
+  <script>
+    var salesPriceToSqFtLowColor = '#ccffcc'
+    var salesPriceToSqFtHighColor = '#004d00'
+    var densityLowColor = '#fee8c8';
+    var densityHighColor = '#7f0000';
+    var buildingAgeLowColor = '#80d4ff';
+    var buildingAgeHighColor = '#00334d';
+    var boroughAreas = [22.82, 42.47, 69.5, 108.1, 58.69]
+    var neighborhoodNameMap = new Map();
+    neighborhoodNameMap.set('HARLEM-EAST', 'EAST HARLEM');
+    neighborhoodNameMap.set('BEDFORD STUYVESANT', 'BEDFORD-STUYVESANT');
+    neighborhoodNameMap.set("PRINCES BAY", "PRINCE'S BAY");
+    neighborhoodNameMap.set('WEST NEW BRIGHTON', 'WEST BRIGHTON');
+    var neighborhoodDensityMap = new Map();
+    var neighborhoodColorMap = new Map(); // map density to a color
+
+    // map legend
+    var w = 960,
+      h = 720,
+      x1 = 700,
+      y1 = 680;
+
+    var idGradient = "legendGradient";
+
+    var key = d3.select("#bar").append("svg")
+      .attr("width", w)
+      .attr("height", h);
+
+    var legend = key.append("defs")
+      .append("svg:linearGradient")
+      .attr("id", "gradient")
+      .attr("x1", "0%")
+      .attr("y1", "100%")
+      .attr("x2", "100%")
+      .attr("y2", "100%")
+      .attr("spreadMethod", "pad");
+
+    var y = d3.scaleLinear()
+      .range([300, 0])
+      .domain([68, 12]);
+
+    var yAxis = d3.axisBottom()
+      .scale(y)
+      .ticks(5);
+
+    key.append("g")
+      .attr("class", "y axis")
+      .attr("transform", "translate(0,30)")
+      .call(yAxis)
+      .append("text")
+      .attr("transform", "rotate(-90)")
+      .attr("y", 0)
+      .attr("dy", ".71em")
+      .attr("visibility", "hidden");
+
+    // NYC map
+    var svg = d3.select("svg"),
+      width = +svg.attr("width"),
+      height = +svg.attr("height");
+
+    d3.csv("neighborhood_updated_data.csv", function(data) {
+      // http://bl.ocks.org/pstuffa/38111aa2e3077baa67f1d0c42df9bf08
+      // http://data.beta.nyc//dataset/0ff93d2d-90ba-457c-9f7e-39e47bf2ac5f/resource/35dd04fb-81b3-479b-a074-a27a37888ce7/download/d085e2f8d0b54d4590b1e7d1f35594c1pediacitiesnycneighborhoods.geojson
+      d3.json("./nycneighborhoods.json", function(error, nyc) {
+        if (error) throw error;
+        var propertyDensityArray = [];
+        var buildingAges = [];
+        // Initialize all ratios to be -1 and num_properties to be -1?
+        for (var j = 0; j < nyc.features.length; j++) {
+          nyc.features[j].properties.ratio = "N/A";
+          nyc.features[j].properties.propertyDensity = "N/A";
+          nyc.features[j].properties.buildingAge = "N/A";
+        }
+        // Loop through each state data value in the .csv file
+        for (var i = 0; i < data.length; i++) {
+          // Grab neighborhood Name
+          var dataNeighborhood = data[i].NEIGHBORHOOD;
+          // Grab neighborhood ratio
+          var dataRatio = data[i].SALE_PRICE_TO_SQUARE_FOOT_RATIO;
+          // Get the ratio between the number of transactions and the size of the borough
+          var transactions_to_size_ratio = data[i].TRANSACTIONS_TO_SIZE_RATIO;
+          // Get the year built
+          var yearBuild = parseInt(data[i].YEAR_BUILT);
+          // Find the corresponding neighborhood and it's fields inside the GeoJSON
+          for (var j = 0; j < nyc.features.length; j++) {
+            var jsonNeighborhood = nyc.features[j].properties.neighborhood;
+            var uppercaseDataNeighborhood = dataNeighborhood.toUpperCase();
+            var uppercaseJsonNeighborhood = jsonNeighborhood.toUpperCase();
+            var mappedNeighborhoodName = neighborhoodNameMap.get(uppercaseDataNeighborhood);
+            if (uppercaseJsonNeighborhood == mappedNeighborhoodName || uppercaseDataNeighborhood.indexOf(uppercaseJsonNeighborhood) !== -1 || uppercaseJsonNeighborhood.indexOf(uppercaseDataNeighborhood) !== -1) {
+              if (mappedNeighborhoodName != undefined && (uppercaseDataNeighborhood.indexOf(uppercaseJsonNeighborhood) !== -1 || uppercaseJsonNeighborhood.indexOf(uppercaseDataNeighborhood) !== -1)) {
+                continue;
+              }
+              // Get the sales price to sq ft value into the json
+              nyc.features[j].properties.ratio = dataRatio;
+
+              // Get the property density for the borough
+              propertyDensityArray.push(Math.round(parseFloat(transactions_to_size_ratio)));
+              nyc.features[j].properties.propertyDensity = Math.round(parseFloat(transactions_to_size_ratio));
+              console.log(Math.round(parseFloat(transactions_to_size_ratio)));
+
+              // Get the number of years since 2018
+              var buildingAge = (new Date()).getFullYear() - yearBuild;
+              buildingAges.push(buildingAge);
+              nyc.features[j].properties.buildingAge = buildingAge;
+              // Stop looking through the JSON
+              break;
+            }
+          }
+        }
+        var minPropertyDensity = d3.min(propertyDensityArray);
+        var maxPropertyDensity = d3.max(propertyDensityArray);
+        var propertyDensityRamp = d3.scaleLinear().domain([minPropertyDensity, maxPropertyDensity]).range([densityLowColor, densityHighColor])
+
+        var sqftRatioData = [];
+        for (var d = 0; d < data.length; d++) {
+          sqftRatioData.push(parseFloat(data[d].SALE_PRICE_TO_SQUARE_FOOT_RATIO));
+          neighborhoodDensityMap.set(data[d].BOROUGH, Math.round(parseFloat(data[d].TRANSACTIONS_TO_SIZE_RATIO)));
+          neighborhoodColorMap.set(Math.round(parseFloat(data[d].TRANSACTIONS_TO_SIZE_RATIO)), propertyDensityRamp(Math.round(parseFloat(data[d].TRANSACTIONS_TO_SIZE_RATIO))));
+        }
+        var minRatio = d3.min(sqftRatioData)
+        var maxRatio = d3.max(sqftRatioData)
+        var salesPriceToSqFtRatioRamp = d3.scaleLinear().domain([minRatio, maxRatio]).range([salesPriceToSqFtLowColor, salesPriceToSqFtHighColor])
+
+        var minBuildingAge = d3.min(buildingAges);
+        var maxBuildingAge = d3.max(buildingAges);
+        var propertyAgeRamp = d3.scaleLinear().domain([minBuildingAge, maxBuildingAge]).range([buildingAgeLowColor, buildingAgeHighColor])
+        var path = d3.geoPath()
+          .projection(d3.geoConicConformal()
+            .parallels([33, 45])
+            .rotate([96, -39])
+            .fitSize([width, height], nyc));
+
+        var normalMap = svg.append("g");
+        normalMap.selectAll("path")
+          .data(nyc.features)
+          .enter().append("path")
+          .attr("d", path)
+          .attr("class", "normalMap")
+          .attr("visibility", "visible")
+          .style("fill", "#d9d9d9")
+          .on("mouseenter", function(d) {
+            d3.select(this)
+              .style("stroke-width", 1.5)
+              .style("stroke-dasharray", 0)
+            d3.select("#neighborhoodPopover")
+              .transition()
+              .style("opacity", 1)
+              .style("left", (d3.event.pageX) + "px")
+              .style("top", (d3.event.pageY) + "px")
+              .text(d.properties.neighborhood)
+          })
+          .on("mouseleave", function(d) {
+            d3.select(this)
+              .style("stroke-width", .25)
+              .style("stroke-dasharray", 1)
+            d3.select("#cneighborhoodPopoverountyText")
+              .transition()
+              .style("opacity", 0);
+          });
+        var sqftRatios = svg.append("g");
+        sqftRatios.selectAll("path")
+          .data(nyc.features)
+          .enter().append("path")
+          .attr("d", path)
+          .attr("class", "sqftratios")
+          .attr("visibility", "hidden")
+          .style("fill", function(d) {
+            if (d.properties.ratio == "N/A") {
+              return "#000";
+            }
+            return salesPriceToSqFtRatioRamp(d.properties.ratio);
+          })
+          .on("mouseenter", function(d) {
+            d3.select(this)
+              .style("stroke-width", 1.5)
+              .style("stroke-dasharray", 0)
+            d3.select("#neighborhoodPopover")
+              .transition()
+              .style("opacity", 1)
+              .style("left", (d3.event.pageX) + "px")
+              .style("top", (d3.event.pageY) + "px")
+              .text((function() {
+                if (d.properties.ratio == "N/A") {
+                  return d.properties.neighborhood + ": " + "N/A";
+                }
+                return d.properties.neighborhood + ": " + "$" + (parseFloat(d.properties.ratio).toFixed(2)) + "/square ft";
+              })())
+          })
+          .on("mouseleave", function(d) {
+            d3.select(this)
+              .style("stroke-width", .25)
+              .style("stroke-dasharray", 1)
+            d3.select("#cneighborhoodPopoverountyText")
+              .transition()
+              .style("opacity", 0);
+          });
+        var density = svg.append("g");
+        density.selectAll("path")
+          .data(nyc.features)
+          .enter().append("path")
+          .attr("d", path)
+          .attr("class", "density")
+          .attr("visibility", "hidden")
+          .style("fill", function(d) {
+            return neighborhoodColorMap.get(neighborhoodDensityMap.get(d.properties.boroughCode));
+          })
+          .on("mouseenter", function(d) {
+            d3.select(this)
+              .style("stroke-width", 1.5)
+              .style("stroke-dasharray", 0)
+            d3.select("#neighborhoodPopover")
+              .transition()
+              .style("opacity", 1)
+              .style("left", (d3.event.pageX) + "px")
+              .style("top", (d3.event.pageY) + "px")
+              .text((function() {
+                return d.properties.neighborhood + ", " + d.properties.borough + ": " + (parseFloat(neighborhoodDensityMap.get(d.properties.boroughCode)).toFixed(2));
+              })())
+          })
+          .on("mouseleave", function(d) {
+            d3.select(this)
+              .style("stroke-width", .25)
+              .style("stroke-dasharray", 1)
+            d3.select("#cneighborhoodPopoverountyText")
+              .transition()
+              .style("opacity", 0);
+          });
+
+        var age = svg.append("g");
+        age.selectAll("path")
+          .data(nyc.features)
+          .enter().append("path")
+          .attr("d", path)
+          .attr("class", "age")
+          .attr("visibility", "hidden")
+          .style("fill", function(d) {
+            return propertyAgeRamp(d.properties.buildingAge);
+          })
+          .on("mouseenter", function(d) {
+            d3.select(this)
+              .style("stroke-width", 1.5)
+              .style("stroke-dasharray", 0)
+            d3.select("#neighborhoodPopover")
+              .transition()
+              .style("opacity", 1)
+              .style("left", (d3.event.pageX) + "px")
+              .style("top", (d3.event.pageY) + "px")
+              .text((function() {
+                if (d.properties.buildingAge == "N/A") {
+                  return d.properties.neighborhood + ": " + "N/A";
+                }
+                return d.properties.neighborhood + ": " + d.properties.buildingAge + " years";
+              })())
+          })
+          .on("mouseleave", function(d) {
+            d3.select(this)
+              .style("stroke-width", .25)
+              .style("stroke-dasharray", 1)
+            d3.select("#cneighborhoodPopoverountyText")
+              .transition()
+              .style("opacity", 0);
+          });
+        // Checkbox Logic
+        var ratioCheckbox = document.querySelector('input[id="ratio_toggle"]');
+        var densityCheckbox = document.querySelector('input[id="density_toggle"]');
+        var ageCheckbox = document.querySelector('input[id="age_toggle"]');
+
+        var sqFtRatiosToggle = false;
+        var densityToggle = false;
+        var ageToggle = false;
+
+        function makeLegend() {
+          if (sqFtRatiosToggle) {
+            legend.select("stop").remove();
+            legend.select("stop").remove();
+            legend.select("rect").remove();
+            legend.append("stop")
+              .attr("offset", "0%")
+              .attr("stop-color", salesPriceToSqFtLowColor)
+              .attr("stop-opacity", 1);
+            legend.append("stop")
+              .attr("offset", "100%")
+              .attr("stop-color", salesPriceToSqFtHighColor)
+              .attr("stop-opacity", 1);
+            key.attr("visibility", "visible");
+          }
+          if (densityToggle) {
+            legend.select("stop").remove();
+            legend.select("stop").remove();
+            legend.select("rect").remove();
+            legend.append("stop")
+              .attr("offset", "0%")
+              .attr("stop-color", densityLowColor)
+              .attr("stop-opacity", 1);
+            legend.append("stop")
+              .attr("offset", "100%")
+              .attr("stop-color", densityHighColor)
+              .attr("stop-opacity", 1);
+            key.attr("visibility", "visible");
+          }
+          if (ageToggle) {
+            legend.select("stop").remove();
+            legend.select("stop").remove();
+            legend.select("rect").remove();
+            legend.append("stop")
+              .attr("offset", "0%")
+              .attr("stop-color", buildingAgeLowColor)
+              .attr("stop-opacity", 1);
+            legend.append("stop")
+              .attr("offset", "100%")
+              .attr("stop-color", buildingAgeHighColor)
+              .attr("stop-opacity", 1);
+            key.attr("visibility", "visible");
+          }
+          key.append("rect")
+            .attr("width", 300)
+            .attr("height", 20)
+            .style("fill", "url(#gradient)")
+            .attr("transform", "translate(0,10)");
+          if (!(sqFtRatiosToggle || densityToggle || ageToggle)) {
+            key.attr("visibility", "hidden");
+          }
+        }
+
+        ratioCheckbox.onchange = function() {
+          if (this.checked) {
+            d3.selectAll(".sqftratios").attr("visibility", "visible");
+            sqFtRatiosToggle = true
+            makeLegend();
+          } else {
+            d3.selectAll(".sqftratios").attr("visibility", "hidden");
+            sqFtRatiosToggle = false;
+            makeLegend();
+          }
+        };
+        densityCheckbox.onchange = function() {
+          if (this.checked) {
+            d3.selectAll(".density").attr("visibility", "visible");
+            densityToggle = true;
+            makeLegend();
+          } else {
+            d3.selectAll(".density").attr("visibility", "hidden");
+            densityToggle = false;
+            makeLegend();
+          }
+        };
+
+        ageCheckbox.onchange = function() {
+          if (this.checked) {
+            d3.selectAll(".age").attr("visibility", "visible");
+            ageToggle = true;
+            makeLegend();
+          } else {
+            d3.selectAll(".age").attr("visibility", "hidden");
+            ageToggle = false;
+            makeLegend();
+          }
+        };
+      });
+    });
+  </script>
+</body>
